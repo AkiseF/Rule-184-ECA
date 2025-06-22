@@ -33,7 +33,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 road_img = pygame.image.load(os.path.join(parent_dir, "./assets/carril.png"))
 # Crear versiones mejoradas de los coches
-car_img = pygame.image.load(os.path.join(parent_dir, "./assets/1_right.png"))
+car_img = pygame.image.load(os.path.join(parent_dir, "./assets/1_left.png"))
 car_img = pygame.transform.scale(car_img, (CELL_SIZE, CELL_SIZE))
 
 # Versión mejorada para autos descompuestos - copia profunda para no modificar el original

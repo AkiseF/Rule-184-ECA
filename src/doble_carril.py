@@ -39,7 +39,7 @@ road_img = pygame.image.load(os.path.join(parent_dir, "./assets/doble_carril.png
 road_img = pygame.transform.scale(road_img, (WIDTH, HEIGHT))
 
 # Coches para la primera carretera (derecha a izquierda)
-car1_img = pygame.image.load(os.path.join(parent_dir, "./assets/1_right.png"))
+car1_img = pygame.image.load(os.path.join(parent_dir, "./assets/1_left.png"))
 car1_img = pygame.transform.scale(car1_img, (CELL_SIZE, CELL_SIZE))
 
 # Coches para la segunda carretera (izquierda a derecha)
