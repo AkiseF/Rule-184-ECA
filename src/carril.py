@@ -352,20 +352,6 @@ class TrafficSimulator:
                 else:
                     screen.blit(car_img, (x_pos, y_pos))
         
-        # Dibujar líneas de carril con efecto de movimiento
-        if self.generation % 4 < 2:
-            lane_marker_color = (255, 255, 255)
-        else:
-            lane_marker_color = (220, 220, 220)
-        
-        # Línea divisoria central con efecto de movimiento
-        center_y = (UPPER_LANE_Y + LOWER_LANE_Y + CELL_SIZE) // 2
-        for i in range(NUM_CELLS):
-            marker_offset = (self.generation * 2) % CELL_SIZE
-            marker_x = i * CELL_SIZE - marker_offset
-            if marker_x >= 0 and marker_x < WIDTH:
-                pygame.draw.rect(screen, lane_marker_color, (marker_x, center_y, CELL_SIZE//2, 5))
-        
         # Dibujar contador de generaciones con efecto de resaltado
         gen_text = self.font.render(f"Generación: {self.generation}", True, BLACK)
         text_bg = pygame.Surface((gen_text.get_width() + 10, gen_text.get_height() + 6))
