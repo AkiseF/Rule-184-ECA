@@ -26,7 +26,6 @@ LEFT_LANE_4_X = 400    # Carril izquierdo de cuarta carretera (abajo a arriba)
 RIGHT_LANE_4_X = 417   # Carril derecho de cuarta carretera (abajo a arriba)
 
 # Probabilidades
-CAR_CHANGE_LANE_PROB = 0.1    # Reducido para menos caos
 CAR_BREAKDOWN_PROB = 0.02     # Reducido para observar mejor
 CAR_INSERTION_PROB = 0.05     # Reducido para menor densidad
 CAR_TURN_PROB = 0.2          # Probabilidad de dar vuelta en el cruce
@@ -36,8 +35,7 @@ REPAIR_PROB = 0.5
 # Posición del cruce (centro del cruce)
 CROSS_X = 400
 CROSS_Y = 400
-CROSS_WIDTH = 80
-CROSS_HEIGHT = 80
+CROSS_SIZE = 80  # Tamaño del área del cruce (tanto ancho como alto)
 
 # Colores
 BLACK = (0, 0, 0)
@@ -149,12 +147,6 @@ class TrafficCrossSimulator:
             self.font = pygame.font.SysFont(None, 24)
         
         self.simulation_speed = 10  # Velocidad predeterminada
-    
-    def _initialize_lane(self, lane, spacing, offset):
-        """Inicializar un carril con coches espaciados uniformemente"""
-        for i in range(len(lane)):
-            if (i + offset) % spacing == 0:
-                lane[i] = 1
     
     def _initialize_limited_cars(self, lane, num_cars):
         """
@@ -320,61 +312,25 @@ class TrafficCrossSimulator:
             for pos in to_remove:
                 del broken_dict[pos]
         
+        # Lista de pares (diccionario_de_autos_averiados, carril)
+        broken_lanes = [
+            (self.broken_cars_upper_1, self.upper_lane_1),
+            (self.broken_cars_lower_1, self.lower_lane_1),
+            (self.broken_cars_upper_2, self.upper_lane_2),
+            (self.broken_cars_lower_2, self.lower_lane_2),
+            (self.broken_cars_left_3, self.left_lane_3),
+            (self.broken_cars_right_3, self.right_lane_3),
+            (self.broken_cars_left_4, self.left_lane_4),
+            (self.broken_cars_right_4, self.right_lane_4)
+        ]
+        
         # Procesar cada carril
-        process_broken_cars(self.broken_cars_upper_1, self.upper_lane_1)
-        process_broken_cars(self.broken_cars_lower_1, self.lower_lane_1)
-        process_broken_cars(self.broken_cars_upper_2, self.upper_lane_2)
-        process_broken_cars(self.broken_cars_lower_2, self.lower_lane_2)
-        process_broken_cars(self.broken_cars_left_3, self.left_lane_3)
-        process_broken_cars(self.broken_cars_right_3, self.right_lane_3)
-        process_broken_cars(self.broken_cars_left_4, self.left_lane_4)
-        process_broken_cars(self.broken_cars_right_4, self.right_lane_4)
-    
-    def is_cross_area(self, i, lane_type):
-        """Determinar si una celda está en el área del cruce"""
-        if lane_type in ["upper_1", "lower_1", "upper_2", "lower_2"]:
-            # Carriles horizontales
-            cross_start = self.cross_index_h - 1
-            cross_end = self.cross_index_h + 1
-            return cross_start <= i <= cross_end
-        else:
-            # Carriles verticales
-            cross_start = self.cross_index_v - 1
-            cross_end = self.cross_index_v + 1
-            return cross_start <= i <= cross_end
-    
-    def can_enter_cross(self, lane_type):
-        """Determinar si un vehículo puede entrar al cruce (siempre es True ahora que no hay semáforo)"""
-        return True
-    
-    def is_cross_clear(self, i_h, i_v, new_lanes):
-        """
-        Verifica si el cruce está suficientemente despejado para un giro.
-        Modificamos para permitir más giros, solo verificando los puntos clave.
-        """
-        # Solo verificar la celda destino y una celda adicional en la dirección de movimiento
-        # para evitar colisiones inmediatas
-        
-        # Para giros a carretera 1 (upper_lane_1)
-        if new_lanes['upper_1'][self.cross_index_h] == 1:
-            return False
-            
-        # Para giros a carretera 2 (upper_2)
-        elif new_lanes['upper_2'][self.cross_index_h] == 1:
-            return False
-            
-        # Para giros a carretera 3 (left_lane_3)
-        elif new_lanes['left_3'][self.cross_index_v] == 1:
-            return False
-            
-        # Para giros a carretera 4 (right_4)
-        elif new_lanes['right_4'][self.cross_index_v] == 1:
-            return False
-        
-        return True
+        for broken_dict, lane in broken_lanes:
+            process_broken_cars(broken_dict, lane)
     
     def update(self):
         self.generation += 1
+        
         
         # Procesar autos descompuestos
         self.handle_broken_cars()
@@ -403,17 +359,12 @@ class TrafficCrossSimulator:
             'left_4': new_left_lane_4,
             'right_4': new_right_lane_4
         }
-        
-        # -- Manejar los giros en el cruce --
-        
-        # Lista para almacenar los giros a realizar
+          # Listas para almacenar giros y averías
         turns = []
-        # Lista para almacenar averías (necesitas inicializar esta lista)
         new_breakdowns = []
         
-        # --- SIMPLIFICAR LA LÓGICA DE GIROS ---
-        
-        # 1. Giro desde carril inferior 1 hacia carretera 4 (derecha)
+        # Giros en el cruce
+        # 1. Giro desde carril inferior 1 hacia carretera 4
         if (new_lower_lane_1[self.cross_index_h] == 1 and
             new_right_lane_4[self.cross_index_v] == 0 and
             random.random() < CAR_TURN_PROB):
@@ -440,49 +391,34 @@ class TrafficCrossSimulator:
             random.random() < CAR_TURN_PROB):
             turns.append(("right_4_to_upper_2", self.cross_index_h, self.cross_index_v))
             new_right_lane_4[self.cross_index_v] = 0
-        
-        # Aquí deberías agregar la lógica para determinar los coches que se averían
-        # Por ejemplo:
+          # Verificar posibles averías en todos los carriles
+        # Carriles horizontales
+        lanes_h = [
+            ('upper_1', new_upper_lane_1, self.broken_cars_upper_1),
+            ('lower_1', new_lower_lane_1, self.broken_cars_lower_1),
+            ('upper_2', new_upper_lane_2, self.broken_cars_upper_2),
+            ('lower_2', new_lower_lane_2, self.broken_cars_lower_2)
+        ]
         
         # Verificar averías en carreteras horizontales
-        for i in range(NUM_CELLS_HORIZONTAL):
-            # Carretera 1
-            if new_upper_lane_1[i] == 1 and i not in self.broken_cars_upper_1:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("upper_1", i))
+        for name, lane, broken_dict in lanes_h:
+            for i in range(NUM_CELLS_HORIZONTAL):
+                if lane[i] == 1 and i not in broken_dict and random.random() < CAR_BREAKDOWN_PROB:
+                    new_breakdowns.append((name, i))
         
-            if new_lower_lane_1[i] == 1 and i not in self.broken_cars_lower_1:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("lower_1", i))
-        
-            # Carretera 2
-            if new_upper_lane_2[i] == 1 and i not in self.broken_cars_upper_2:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("upper_2", i))
-        
-            if new_lower_lane_2[i] == 1 and i not in self.broken_cars_lower_2:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("lower_2", i))
+        # Carriles verticales
+        lanes_v = [
+            ('left_3', new_left_lane_3, self.broken_cars_left_3),
+            ('right_3', new_right_lane_3, self.broken_cars_right_3),
+            ('left_4', new_left_lane_4, self.broken_cars_left_4),
+            ('right_4', new_right_lane_4, self.broken_cars_right_4)
+        ]
         
         # Verificar averías en carreteras verticales
-        for i in range(NUM_CELLS_VERTICAL):
-            # Carretera 3
-            if new_left_lane_3[i] == 1 and i not in self.broken_cars_left_3:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("left_3", i))
-        
-            if new_right_lane_3[i] == 1 and i not in self.broken_cars_right_3:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("right_3", i))
-        
-            # Carretera 4
-            if new_left_lane_4[i] == 1 and i not in self.broken_cars_left_4:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("left_4", i))
-        
-            if new_right_lane_4[i] == 1 and i not in self.broken_cars_right_4:
-                if random.random() < CAR_BREAKDOWN_PROB:
-                    new_breakdowns.append(("right_4", i))
+        for name, lane, broken_dict in lanes_v:
+            for i in range(NUM_CELLS_VERTICAL):
+                if lane[i] == 1 and i not in broken_dict and random.random() < CAR_BREAKDOWN_PROB:
+                    new_breakdowns.append((name, i))
         
         # Aplicar giros en el cruce
         for turn, i_h, i_v in turns:
@@ -497,26 +433,20 @@ class TrafficCrossSimulator:
                 self.turn_count += 1
             elif turn == "right_4_to_upper_2":
                 new_upper_lane_2[i_h] = 1
-                self.turn_count += 1
-    
-        # Aplicar nuevas averías
+                self.turn_count += 1        # Aplicar nuevas averías usando un diccionario para mapear los nombres de los carriles a sus diccionarios
+        broken_dict_map = {
+            'upper_1': self.broken_cars_upper_1,
+            'lower_1': self.broken_cars_lower_1,
+            'upper_2': self.broken_cars_upper_2,
+            'lower_2': self.broken_cars_lower_2,
+            'left_3': self.broken_cars_left_3,
+            'right_3': self.broken_cars_right_3,
+            'left_4': self.broken_cars_left_4,
+            'right_4': self.broken_cars_right_4
+        }
+        
         for lane, i in new_breakdowns:
-            if lane == "upper_1":
-                self.broken_cars_upper_1[i] = REPAIR_ATTEMPTS
-            elif lane == "lower_1":
-                self.broken_cars_lower_1[i] = REPAIR_ATTEMPTS
-            elif lane == "upper_2":
-                self.broken_cars_upper_2[i] = REPAIR_ATTEMPTS
-            elif lane == "lower_2":
-                self.broken_cars_lower_2[i] = REPAIR_ATTEMPTS
-            elif lane == "left_3":
-                self.broken_cars_left_3[i] = REPAIR_ATTEMPTS
-            elif lane == "right_3":
-                self.broken_cars_right_3[i] = REPAIR_ATTEMPTS
-            elif lane == "left_4":
-                self.broken_cars_left_4[i] = REPAIR_ATTEMPTS
-            elif lane == "right_4":
-                self.broken_cars_right_4[i] = REPAIR_ATTEMPTS
+            broken_dict_map[lane][i] = REPAIR_ATTEMPTS
         
         # Manejar inserciones en frontera nula de manera más ordenada
         if self.boundary_mode == "null":
@@ -552,24 +482,21 @@ class TrafficCrossSimulator:
                     new_left_lane_4[-1] = 1
                 elif new_right_lane_4[-1] == 0:
                     new_right_lane_4[-1] = 1
+          # Asegurar que los autos descompuestos permanezcan en su lugar utilizando las listas de carriles
+        broken_pairs = [
+            (self.broken_cars_upper_1, new_upper_lane_1),
+            (self.broken_cars_lower_1, new_lower_lane_1),
+            (self.broken_cars_upper_2, new_upper_lane_2),
+            (self.broken_cars_lower_2, new_lower_lane_2),
+            (self.broken_cars_left_3, new_left_lane_3),
+            (self.broken_cars_right_3, new_right_lane_3),
+            (self.broken_cars_left_4, new_left_lane_4),
+            (self.broken_cars_right_4, new_right_lane_4)
+        ]
         
-        # Asegurar que los autos descompuestos permanezcan en su lugar
-        for pos in self.broken_cars_upper_1:
-            new_upper_lane_1[pos] = 1
-        for pos in self.broken_cars_lower_1:
-            new_lower_lane_1[pos] = 1
-        for pos in self.broken_cars_upper_2:
-            new_upper_lane_2[pos] = 1
-        for pos in self.broken_cars_lower_2:
-            new_lower_lane_2[pos] = 1
-        for pos in self.broken_cars_left_3:
-            new_left_lane_3[pos] = 1
-        for pos in self.broken_cars_right_3:
-            new_right_lane_3[pos] = 1
-        for pos in self.broken_cars_left_4:
-            new_left_lane_4[pos] = 1
-        for pos in self.broken_cars_right_4:
-            new_right_lane_4[pos] = 1
+        for broken_dict, lane in broken_pairs:
+            for pos in broken_dict:
+                lane[pos] = 1
         
         # Forzar el límite estricto de 15 coches por vialidad
         # Si hay más de 15, eliminar algunos aleatoriamente
@@ -866,8 +793,7 @@ class TrafficCrossSimulator:
                     screen.blit(broken_car_up_img, (x_pos, y_pos))
                 else:
                     screen.blit(car_up_img, (x_pos, y_pos))
-        
-        # Resaltar el área del cruce para mejor visualización
+          # Resaltar el área del cruce para mejor visualización
         cross_area = pygame.Surface((CELL_SIZE*3, CELL_SIZE*3), pygame.SRCALPHA)
         cross_area.fill((255, 255, 0, 50))  # Amarillo transparente
         
