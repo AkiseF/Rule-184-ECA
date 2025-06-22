@@ -1,48 +1,67 @@
-# Pygame Traffic Simulation
+# Simulación de Tráfico con Pygame
 
-This project simulates a moving car using Pygame. The simulation represents cars with '1' and empty spaces with '0'. The car moves along a road, and the simulation updates its position based on defined rules.
+Este proyecto simula el tráfico vehicular utilizando el autómata celular Regla 184. La simulación representa vehículos con '1' y espacios vacíos con '0'. Los vehículos se mueven en diferentes escenarios: carril único, doble carril o cruce con semáforo.
 
-## Project Structure
+## Estructura del Proyecto
 
 ```
-pygame-traffic-simulation
+Rule-184-ECA
 ├── src
-│   ├── main.py            # Entry point of the application
-│   ├── simulation.py      # Manages the state of the simulation
-│   ├── visualization.py    # Handles rendering using Pygame
+│   ├── main.py            # Menú principal para seleccionar el tipo de simulación
+│   ├── carril.py          # Simulación de carril único (dos carriles en sentidos opuestos)
+│   ├── doble_carril.py    # Simulación de doble carril (dos carriles en cada sentido)
+│   ├── cruce.py           # Simulación de cruce con semáforo
+│   ├── simulation.py      # Implementación del autómata celular y visualización
 │   └── utils
-│       └── constants.py   # Contains constants used throughout the project
+│       └── constants.py   # Constantes utilizadas en el proyecto
 ├── assets
-│   ├── car.png            # Image asset for the car
-│   └── road.png           # Image asset for the road background
-├── requirements.txt       # Lists dependencies required for the project
-└── README.md              # Documentation for the project
+│   ├── carril.png         # Fondo para la simulación de carril único
+│   ├── doble_carril.png   # Fondo para la simulación de doble carril
+│   ├── cruce.png          # Fondo para la simulación de cruce
+│   ├── 1_right.png        # Imagen de vehículo en dirección derecha
+│   ├── 1_left.png         # Imagen de vehículo en dirección izquierda
+│   ├── 1_up.png           # Imagen de vehículo en dirección arriba
+│   ├── 1_down.png         # Imagen de vehículo en dirección abajo
+│   └── ... (otras imágenes de vehículos)
+├── requirements.txt       # Dependencias requeridas para el proyecto
+└── README.md              # Documentación del proyecto
 ```
 
-## Installation
+## Instalación
 
-1. Clone the repository:
+1. Clona el repositorio:
    ```
    git clone <repository-url>
-   cd pygame-traffic-simulation
+   cd Rule-184-ECA
    ```
 
-2. Install the required dependencies:
+2. Instala las dependencias requeridas:
    ```
    pip install -r requirements.txt
    ```
 
-## Usage
+## Uso
 
-To run the simulation, execute the following command:
+Para ejecutar la simulación, usa el siguiente comando:
 ```
 python src/main.py
 ```
 
+Esto abrirá un menú donde podrás seleccionar entre tres tipos de simulación:
+- **Carril Único**: Dos carriles con tráfico en sentidos opuestos
+- **Doble Carril**: Cuatro carriles (dos en cada sentido)
+- **Cruce**: Intersección con semáforo
+
+## Implementación de la Regla 184
+
+La Regla 184 es un autómata celular unidimensional que modela el flujo de tráfico. En esta implementación:
+- Los vehículos se representan como '1' en el arreglo
+- Los espacios vacíos se representan como '0'
+- Un vehículo avanza si hay espacio delante de él
+- Un vehículo se detiene si hay otro vehículo adelante
+
 ## Assets
 
-Make sure to include the necessary image assets (`car.png` and `road.png`) in the `assets` directory for the simulation to display correctly.
-
-## Contributing
-
-Feel free to submit issues or pull requests if you have suggestions or improvements for the project.
+Asegúrate de incluir todas las imágenes necesarias en el directorio `assets` para que la simulación se muestre correctamente:
+- Fondos de carreteras (`carril.png`, `doble_carril.png`, `cruce.png`)
+- Imágenes de vehículos en diferentes direcciones
