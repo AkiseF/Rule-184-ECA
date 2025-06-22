@@ -149,13 +149,8 @@ class TrafficCrossSimulator:
         self.simulation_speed = 10  # Velocidad predeterminada
     
     def _initialize_limited_cars(self, lane, num_cars):
-        """
-        Inicializa un carril con un número específico de coches distribuidos uniformemente
-        
-        Args:
-            lane: El carril donde colocar los coches
-            num_cars: Número exacto de coches a colocar
-        """
+        #lane: El carril donde colocar los coches
+        #num_cars: Número exacto de coches a colocar
         lane_length = len(lane)
         
         # Si el carril es demasiado pequeño para el número de coches, colocamos menos
@@ -520,12 +515,10 @@ class TrafficCrossSimulator:
         Fuerza el límite de coches en un par de carriles.
         Si hay más coches que el límite, elimina algunos aleatoriamente
         pero evitando los coches descompuestos.
-        
-        Args:
-            lane1: Primer carril
-            lane2: Segundo carril
-            max_cars: Número máximo de coches permitido en ambos carriles
         """
+        #lane1: Primer carril
+        #lane2: Segundo carril
+        #max_cars: Número máximo de coches permitido en ambos carriles
         total_cars = np.sum(lane1) + np.sum(lane2)
         
         if total_cars > max_cars:
