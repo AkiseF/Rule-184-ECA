@@ -10,8 +10,8 @@ pygame.init()
 # Constantes
 WIDTH, HEIGHT = 800, 800   # Dimensiones para acomodar el cruce
 CELL_SIZE = 20             # Tamaño de celda más pequeño para mejor visualización
-NUM_CELLS_HORIZONTAL = 60  # Número de celdas horizontales
-NUM_CELLS_VERTICAL = 60    # Número de celdas verticales
+NUM_CELLS_HORIZONTAL = 40  # Número de celdas horizontales
+NUM_CELLS_VERTICAL = 40    # Número de celdas verticales
 
 # Posiciones Y para los carriles horizontales
 UPPER_LANE_1_Y = 361   # Carril superior de primera carretera (derecha a izquierda)
@@ -26,7 +26,7 @@ LEFT_LANE_4_X = 400    # Carril izquierdo de cuarta carretera (abajo a arriba)
 RIGHT_LANE_4_X = 417   # Carril derecho de cuarta carretera (abajo a arriba)
 
 # Probabilidades
-CAR_BREAKDOWN_PROB = 0.2      # Probabilidad de avería/se descomponga un coche 
+CAR_BREAKDOWN_PROB = 0.4      # Probabilidad de avería/se descomponga un coche 
 CAR_INSERTION_PROB = 0.05     # Probabilidad de densidad
 CAR_TURN_PROB = 0.2           # Probabilidad de dar vuelta en el cruce
 REPAIR_ATTEMPTS = 20          # Número de iteraciones para reparar un coche
@@ -90,15 +90,18 @@ broken_car_up_img.blit(red_overlay, (0, 0))
 
 class Car:
     def __init__(self, road_id, lane_id, position, direction):
-        self.road_id = road_id      # 1, 2, 3, 4 (identificador de carretera)
-        self.lane_id = lane_id      # "left"/"upper" o "right"/"lower"
+        self.road_id = road_id      # 1, 2, 3, 4 (identificador de carretera actual)
+        self.lane_id = lane_id      # "left"/"upper" o "right"/"lower" (carril actual)
         self.position = position    # Índice en el arreglo
         self.direction = direction  # "left_to_right", "right_to_left", "top_to_bottom", "bottom_to_top"
-        self.status = "active"      # "active", "broken", "turning"
+        self.status = "active"      # "active", "broken", "turning", "changing_lane"
         self.turn_target = None     # Para cuando está girando: (road_id_destino, lane_id_destino, position_destino)
         self.repair_countdown = 0   # Contador para reparación si está averiado
-        self.car_type = random.randint(1, 4)  # Tipo de coche (variación visual)
+        self.origin_id = road_id    # Guardamos el origen del coche para determinar su tipo y apariencia
+        self.car_type = random.randint(1, 4)  # Variación visual secundaria
         self.turning_progress = 0   # Contador para controlar la animación del giro
+        self.lane_change_progress = 0  # Contador para cambios de carril
+        self.lane_change_target = None  # Para cuando está cambiando de carril
         self.id = f"{road_id}_{lane_id}_{position}_{random.randint(1000, 9999)}"  # ID único para el coche
     
     def update(self, simulation):
@@ -108,6 +111,8 @@ class Car:
             return False  # No hay cambio de posición
         elif self.status == "turning":
             return self.update_turning(simulation)
+        elif self.status == "changing_lane":
+            return self.update_lane_change(simulation)
         else:
             return self.update_movement(simulation)
     
@@ -129,47 +134,76 @@ class Car:
                 self.turn_target = turn_target
                 self.turning_progress = 0
                 return True  # Hemos iniciado un giro
-        
-        # Si no gira, aplicar la regla 184
+    
+        # Si no gira, verificar si puede cambiar de carril (20% de probabilidad)
+        if not is_near_intersection and random.random() < 0.2:  # 20% de probabilidad de cambiar de carril
+            lane_change_target = self.find_lane_change_target(simulation)
+            if lane_change_target:
+                self.status = "changing_lane"
+                self.lane_change_target = lane_change_target
+                self.lane_change_progress = 0
+                return True  # Iniciamos un cambio de carril
+    
+        # Si no gira ni cambia de carril, aplicar la regla 184 para avanzar
         if self.direction == "left_to_right":
             # Mover de izquierda a derecha
             next_position = (self.position + 1) % lane_length if simulation.boundary_mode == "toroid" else self.position + 1
-            # Verificar si puede avanzar (hay espacio adelante)
-            can_move = next_position < lane_length and lane_array[next_position] == 0
-            
-            if can_move:
-                self.position = next_position
-                return True  # La posición cambió
+            # Verificar si puede avanzar (hay espacio adelante y está dentro de los límites)
+            if simulation.boundary_mode == "toroid" or (next_position < lane_length):
+                next_position_check = next_position % lane_length
+                can_move = lane_array[next_position_check] == 0
+                if can_move:
+                    self.position = next_position
+                    return True  # La posición cambió
+                else:
+                    # Si no puede avanzar, verificar si hay un coche averiado adelante
+                    # En caso de que haya, el coche espera (no desaparece)
+                    return False  # No hubo cambio de posición, esperando
                 
         elif self.direction == "right_to_left":
             # Mover de derecha a izquierda
             next_position = (self.position - 1) % lane_length if simulation.boundary_mode == "toroid" else self.position - 1
-            # Verificar si puede avanzar (hay espacio adelante)
-            can_move = next_position >= 0 and lane_array[next_position] == 0
-            
-            if can_move:
-                self.position = next_position
-                return True  # La posición cambió
+            # Verificar si puede avanzar (hay espacio adelante y está dentro de los límites)
+            if simulation.boundary_mode == "toroid" or (next_position >= 0):
+                next_position_check = next_position % lane_length
+                can_move = lane_array[next_position_check] == 0
+                if can_move:
+                    self.position = next_position
+                    return True  # La posición cambió
+                else:
+                    # Si no puede avanzar, verificar si hay un coche averiado adelante
+                    # En caso de que haya, el coche espera (no desaparece)
+                    return False  # No hubo cambio de posición, esperando
                 
         elif self.direction == "top_to_bottom":
             # Mover de arriba a abajo
             next_position = (self.position + 1) % lane_length if simulation.boundary_mode == "toroid" else self.position + 1
-            # Verificar si puede avanzar
-            can_move = next_position < lane_length and lane_array[next_position] == 0
-            
-            if can_move:
-                self.position = next_position
-                return True  # La posición cambió
+            # Verificar si puede avanzar (hay espacio adelante y está dentro de los límites)
+            if simulation.boundary_mode == "toroid" or (next_position < lane_length):
+                next_position_check = next_position % lane_length
+                can_move = lane_array[next_position_check] == 0
+                if can_move:
+                    self.position = next_position
+                    return True  # La posición cambió
+                else:
+                    # Si no puede avanzar, verificar si hay un coche averiado adelante
+                    # En caso de que haya, el coche espera (no desaparece)
+                    return False  # No hubo cambio de posición, esperando
                 
         elif self.direction == "bottom_to_top":
             # Mover de abajo a arriba
             next_position = (self.position - 1) % lane_length if simulation.boundary_mode == "toroid" else self.position - 1
-            # Verificar si puede avanzar
-            can_move = next_position >= 0 and lane_array[next_position] == 0
-            
-            if can_move:
-                self.position = next_position
-                return True  # La posición cambió
+            # Verificar si puede avanzar (hay espacio adelante y está dentro de los límites)
+            if simulation.boundary_mode == "toroid" or (next_position >= 0):
+                next_position_check = next_position % lane_length
+                can_move = lane_array[next_position_check] == 0
+                if can_move:
+                    self.position = next_position
+                    return True  # La posición cambió
+                else:
+                    # Si no puede avanzar, verificar si hay un coche averiado adelante
+                    # En caso de que haya, el coche espera (no desaparece)
+                    return False  # No hubo cambio de posición, esperando
                 
         # Verificar si el coche debe averiarse
         if random.random() < CAR_BREAKDOWN_PROB:
@@ -182,11 +216,19 @@ class Car:
         # Actualizar contador de reparación
         if self.repair_countdown > 0:
             self.repair_countdown -= 1
+            return False  # No hay cambio todavía
         
+        # Cuando el countdown llega a 0, decidir si reparar o remolcar (eliminar)
         if self.repair_countdown <= 0:
             if random.random() < REPAIR_PROB:
+                # 50% probabilidad: Coche se repara y continúa
                 self.status = "active"
-                return True  # El estado cambió
+                self.repair_countdown = 0
+                return True  # El estado cambió a activo
+            else:
+                # 50% probabilidad: Coche es remolcado por la grúa
+                self.status = "removed"  # Marcamos para eliminación
+                return True  # El estado cambió a removido
         return False
     
     def update_turning(self, simulation):
@@ -195,40 +237,73 @@ class Car:
         
         # Si el giro está completo
         if self.turning_progress >= 3:  # 3 pasos para completar el giro
+            if self.turn_target is None:
+                self.status = "active"
+                return False
+                
             # Obtener datos del destino
             dest_road_id, dest_lane_id, dest_position = self.turn_target
             
-            # Verificar si el destino está libre
+            # Verificar si el destino está libre y dentro de límites válidos
             dest_lane = self.get_lane_array_by_ids(simulation, dest_road_id, dest_lane_id)
             
-            if dest_position >= 0 and dest_position < len(dest_lane) and dest_lane[dest_position] == 0:
-                # Eliminar el coche de su posición actual
-                current_lane = self.get_lane_array(simulation)
-                if 0 <= self.position < len(current_lane):
-                    # Actualizar propiedades del coche
-                    self.road_id = dest_road_id
-                    self.lane_id = dest_lane_id
-                    self.position = dest_position
-                    self.status = "active"
-                    
-                    # Actualizar la dirección según la nueva carretera
-                    if dest_road_id == 1:
-                        self.direction = "right_to_left"
-                    elif dest_road_id == 2:
-                        self.direction = "left_to_right"
-                    elif dest_road_id == 3:
-                        self.direction = "top_to_bottom"
-                    elif dest_road_id == 4:
-                        self.direction = "bottom_to_top"
-                    
-                    # Incrementar contador de giros
-                    simulation.turn_count += 1
-                    return True
+            if dest_lane is not None and 0 <= dest_position < len(dest_lane) and dest_lane[dest_position] == 0:
+                # El origen se mantiene pero la carretera y carril cambian
+                # Mantener el origen_id para que se conserve el tipo/color del coche
+                self.road_id = dest_road_id
+                self.lane_id = dest_lane_id
+                self.position = dest_position
+                self.status = "active"
+                
+                # Actualizar la dirección según la nueva carretera
+                if dest_road_id == 1:
+                    self.direction = "right_to_left"
+                elif dest_road_id == 2:
+                    self.direction = "left_to_right"
+                elif dest_road_id == 3:
+                    self.direction = "top_to_bottom"
+                elif dest_road_id == 4:
+                    self.direction = "bottom_to_top"
+                
+                # Incrementar contador de giros
+                simulation.turn_count += 1
+                self.turn_target = None
+                return True
             
             # Si no pudo completar el giro, volver a estado activo
             self.status = "active"
             self.turn_target = None
             
+        return False
+    
+    def update_lane_change(self, simulation):
+        """Maneja la lógica de cambio de carril"""
+        self.lane_change_progress += 1
+        
+        # Si el cambio de carril está completo (toma 2 pasos)
+        if self.lane_change_progress >= 2:
+            if self.lane_change_target is None:
+                self.status = "active"
+                return False
+            
+            # Obtener datos del destino
+            dest_road_id, dest_lane_id, dest_position = self.lane_change_target
+            
+            # Verificar si el destino sigue libre y es válido
+            dest_lane = self.get_lane_array_by_ids(simulation, dest_road_id, dest_lane_id)
+            
+            if dest_lane is not None and 0 <= dest_position < len(dest_lane) and dest_lane[dest_position] == 0:
+                # Completar el cambio de carril
+                self.lane_id = dest_lane_id
+                self.status = "active"
+                self.lane_change_target = None
+                return True
+            else:
+                # Si el destino ya no está libre, abortar cambio
+                self.status = "active"
+                self.lane_change_target = None
+                return False
+    
         return False
     
     def break_down(self):
@@ -277,6 +352,149 @@ class Car:
                 return (2, "lower", simulation.cross_index_h)
     
         return None  # No hay giro posible
+    
+    def find_lane_change_target(self, simulation):
+        """Encuentra un carril adyacente al que puede cambiar"""
+        # Los carriles adyacentes por tipo de carretera
+        if self.road_id in [1, 2]:  # Carreteras horizontales
+            other_lane_id = "lower" if self.lane_id == "upper" else "upper"
+        else:  # Carreteras verticales
+            other_lane_id = "right" if self.lane_id == "left" else "left"
+        
+        # Obtener el array del otro carril
+        other_lane = self.get_lane_array_by_ids(simulation, self.road_id, other_lane_id)
+        
+        # Verificar si hay espacio en el otro carril para cambiar
+        if 0 <= self.position < len(other_lane) and other_lane[self.position] == 0:
+            # Mirar adelante para ver si hay obstáculos en el carril actual
+            if self.should_change_lane(simulation, other_lane):
+                return (self.road_id, other_lane_id, self.position)
+        
+        return None
+
+    def should_change_lane(self, simulation, other_lane):
+        """Determina si es ventajoso cambiar de carril (hay obstáculos adelante)"""
+        lane_array = self.get_lane_array(simulation)
+        if lane_array is None:
+            return False
+            
+        lane_length = len(lane_array)
+        broken_car_ahead = False  # Bandera para detectar coche averiado adelante
+        
+        # Verificar si hay obstáculos adelante en el carril actual
+        look_ahead = 3  # Distancia para mirar adelante
+        
+        if self.direction == "left_to_right":
+            # Buscar coches averiados adelante
+            for i in range(1, look_ahead + 1):
+                if simulation.boundary_mode == "toroid":
+                    check_pos = (self.position + i) % lane_length
+                else:
+                    check_pos = self.position + i
+                    if check_pos >= lane_length:
+                        break
+                if lane_array[check_pos] == 1:
+                    # Verificar si el coche está averiado según road_id y lane_id
+                    if self.road_id == 1:
+                        if self.lane_id == "upper" and check_pos in simulation.broken_cars_upper_1:
+                            broken_car_ahead = True
+                        elif self.lane_id == "lower" and check_pos in simulation.broken_cars_lower_1:
+                            broken_car_ahead = True
+                    elif self.road_id == 2:
+                        if self.lane_id == "upper" and check_pos in simulation.broken_cars_upper_2:
+                            broken_car_ahead = True
+                        elif self.lane_id == "lower" and check_pos in simulation.broken_cars_lower_2:
+                            broken_car_ahead = True
+                    # Si se encontró un obstáculo, aumentar probabilidad de cambio de carril
+                    if broken_car_ahead:
+                        # 50% de probabilidad si hay un coche averiado adelante
+                        return random.random() < 0.5
+                    return True  # Hay un obstáculo, conviene cambiar
+        
+        elif self.direction == "right_to_left":
+            for i in range(1, look_ahead + 1):
+                if simulation.boundary_mode == "toroid":
+                    check_pos = (self.position - i) % lane_length
+                else:
+                    check_pos = self.position - i
+                    if check_pos < 0:
+                        break
+                if lane_array[check_pos] == 1:
+                    # Verificar si el coche está averiado
+                    if self.road_id == 1:
+                        if self.lane_id == "upper" and check_pos in simulation.broken_cars_upper_1:
+                            broken_car_ahead = True
+                        elif self.lane_id == "lower" and check_pos in simulation.broken_cars_lower_1:
+                            broken_car_ahead = True
+                    elif self.road_id == 2:
+                        if self.lane_id == "upper" and check_pos in simulation.broken_cars_upper_2:
+                            broken_car_ahead = True
+                        elif self.lane_id == "lower" and check_pos in simulation.broken_cars_lower_2:
+                            broken_car_ahead = True
+                    # Si se encontró un obstáculo, aumentar probabilidad de cambio de carril
+                    if broken_car_ahead:
+                        # 50% de probabilidad si hay un coche averiado adelante
+                        return random.random() < 0.5
+                    return True  # Hay un obstáculo, conviene cambiar
+        
+        elif self.direction == "top_to_bottom":
+            for i in range(1, look_ahead + 1):
+                if simulation.boundary_mode == "toroid":
+                    check_pos = (self.position + i) % lane_length
+                else:
+                    check_pos = self.position + i
+                    if check_pos >= lane_length:
+                        break
+                if lane_array[check_pos] == 1:
+                    # Verificar si el coche está averiado
+                    if self.road_id == 3:
+                        if self.lane_id == "left" and check_pos in simulation.broken_cars_left_3:
+                            broken_car_ahead = True
+                        elif self.lane_id == "right" and check_pos in simulation.broken_cars_right_3:
+                            broken_car_ahead = True
+                    elif self.road_id == 4:
+                        if self.lane_id == "left" and check_pos in simulation.broken_cars_left_4:
+                            broken_car_ahead = True
+                        elif self.lane_id == "right" and check_pos in simulation.broken_cars_right_4:
+                            broken_car_ahead = True
+                    # Si se encontró un obstáculo, aumentar probabilidad de cambio de carril
+                    if broken_car_ahead:
+                        # 50% de probabilidad si hay un coche averiado adelante
+                        return random.random() < 0.5
+                    return True
+    
+        elif self.direction == "bottom_to_top":
+            for i in range(1, look_ahead + 1):
+                if simulation.boundary_mode == "toroid":
+                    check_pos = (self.position - i) % lane_length
+                else:
+                    check_pos = self.position - i
+                    if check_pos < 0:
+                        break
+                if lane_array[check_pos] == 1:
+                    # Verificar si el coche está averiado
+                    if self.road_id == 3:
+                        if self.lane_id == "left" and check_pos in simulation.broken_cars_left_3:
+                            broken_car_ahead = True
+                        elif self.lane_id == "right" and check_pos in simulation.broken_cars_right_3:
+                            broken_car_ahead = True
+                    elif self.road_id == 4:
+                        if self.lane_id == "left" and check_pos in simulation.broken_cars_left_4:
+                            broken_car_ahead = True
+                        elif self.lane_id == "right" and check_pos in simulation.broken_cars_right_4:
+                            broken_car_ahead = True
+                    # Si se encontró un obstáculo, aumentar probabilidad de cambio de carril
+                    if broken_car_ahead:
+                        # 50% de probabilidad si hay un coche averiado adelante
+                        return random.random() < 0.5
+                    return True
+        
+        # Si hay un coche averiado adelante, mayor probabilidad de cambio (50%)
+        if broken_car_ahead:
+            return random.random() < 0.5  # 50% de probabilidad si hay coche averiado
+            
+        # Si no hay obstáculos claros, aún hay una pequeña probabilidad de cambiar
+        return random.random() < 0.05  # 5% de probabilidad base
     
     def get_lane_array(self, simulation):
         """Obtiene el arreglo de carril correspondiente a este coche"""
@@ -500,49 +718,87 @@ class TrafficCrossSimulator:
         self.broken_cars_left_4 = {}
         self.broken_cars_right_4 = {}
         
+        # Contar todos los coches activos y averiados
+        active_cars_count = 0
+        cars_by_road = {1: 0, 2: 0, 3: 0, 4: 0}
+        
         # Asignar posiciones desde los objetos Car
         for car in self._get_all_cars():
-            if car.status in ["active", "broken"]:  # Sólo considerar coches activos y averiados
-                if car.road_id == 1:
-                    if car.lane_id == "upper":
-                        self.upper_lane_1[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_upper_1[car.position] = car.repair_countdown
-                    else:  # lane_id == "lower"
-                        self.lower_lane_1[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_lower_1[car.position] = car.repair_countdown
-                elif car.road_id == 2:
-                    if car.lane_id == "upper":
-                        self.upper_lane_2[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_upper_2[car.position] = car.repair_countdown
-                    else:  # lane_id == "lower"
-                        self.lower_lane_2[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_lower_2[car.position] = car.repair_countdown
-                elif car.road_id == 3:
-                    if car.lane_id == "left":
-                        self.left_lane_3[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_left_3[car.position] = car.repair_countdown
-                    else:  # lane_id == "right"
-                        self.right_lane_3[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_right_3[car.position] = car.repair_countdown
-                elif car.road_id == 4:
-                    if car.lane_id == "left":
-                        self.left_lane_4[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_left_4[car.position] = car.repair_countdown
-                    else:  # lane_id == "right"
-                        self.right_lane_4[car.position] = 1
-                        if car.status == "broken":
-                            self.broken_cars_right_4[car.position] = car.repair_countdown
-        
-        # Los métodos antiguos (apply_rule_184_horizontal, apply_rule_184_vertical, etc.)
-        # han sido reemplazados por la lógica en la clase Car y el nuevo método update
-        # que utiliza objetos Car en lugar de arrays
+            if car.status in ["removed", "towed"]:  # Omitir coches removidos o remolcados
+                continue
+                
+            # Contar coches por carretera para estadísticas
+            if car.status in ["active", "broken"]:
+                active_cars_count += 1
+                cars_by_road[car.road_id] = cars_by_road.get(car.road_id, 0) + 1
+            
+            try:
+                # Asegurar que la posición está dentro de los límites
+                if car.road_id in [1, 2]:
+                    pos = car.position
+                    if pos < 0 or pos >= NUM_CELLS_HORIZONTAL:
+                        pos = pos % NUM_CELLS_HORIZONTAL  # Aplicar toroide si está fuera de límites
+                        car.position = pos  # Actualizar posición del coche
+                    
+                    if car.road_id == 1:
+                        if car.lane_id == "upper":
+                            # Evitar sobrescribir celdas ya ocupadas
+                            if self.upper_lane_1[pos] == 0:
+                                self.upper_lane_1[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_upper_1[pos] = car.repair_countdown
+                        elif car.lane_id == "lower":
+                            if self.lower_lane_1[pos] == 0:
+                                self.lower_lane_1[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_lower_1[pos] = car.repair_countdown
+                    elif car.road_id == 2:
+                        if car.lane_id == "upper":
+                            if self.upper_lane_2[pos] == 0:
+                                self.upper_lane_2[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_upper_2[pos] = car.repair_countdown
+                        elif car.lane_id == "lower":
+                            if self.lower_lane_2[pos] == 0:
+                                self.lower_lane_2[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_lower_2[pos] = car.repair_countdown
+                else:  # road_id en [3, 4]
+                    pos = car.position
+                    if pos < 0 or pos >= NUM_CELLS_VERTICAL:
+                        pos = pos % NUM_CELLS_VERTICAL  # Aplicar toroide si está fuera de límites
+                        car.position = pos  # Actualizar posición del coche
+                    
+                    if car.road_id == 3:
+                        if car.lane_id == "left":
+                            if self.left_lane_3[pos] == 0:
+                                self.left_lane_3[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_left_3[pos] = car.repair_countdown
+                        elif car.lane_id == "right":
+                            if self.right_lane_3[pos] == 0:
+                                self.right_lane_3[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_right_3[pos] = car.repair_countdown
+                    elif car.road_id == 4:
+                        if car.lane_id == "left":
+                            if self.left_lane_4[pos] == 0:
+                                self.left_lane_4[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_left_4[pos] = car.repair_countdown
+                        elif car.lane_id == "right":
+                            if self.right_lane_4[pos] == 0:
+                                self.right_lane_4[pos] = 1
+                                if car.status == "broken":
+                                    self.broken_cars_right_4[pos] = car.repair_countdown
+            except IndexError:
+                # En caso de error de índice, corregir la posición
+                if car.road_id in [1, 2]:
+                    car.position = car.position % NUM_CELLS_HORIZONTAL
+                else:
+                    car.position = car.position % NUM_CELLS_VERTICAL
+                    
+                # Intentamos colocarlo de nuevo en la siguiente iteración
     
     def _enforce_car_limit(self, lane1, lane2, max_cars, road_id=None, lane1_id=None, lane2_id=None):
         """
@@ -564,18 +820,75 @@ class TrafficCrossSimulator:
             excess = total_cars - max_cars
             
             # Recopilar índices de coches que pueden eliminarse
-            # (evitando los descompuestos)
-            indices_lane1 = [i for i in range(len(lane1)) if lane1[i] == 1]
-            indices_lane2 = [i for i in range(len(lane2)) if lane2[i] == 1]
+            # (evitando los coches descompuestos)
+            broken_indices_lane1 = []
+            working_indices_lane1 = []
+            for i in range(len(lane1)):
+                if lane1[i] == 1:
+                    # Verificar si el coche está averiado
+                    is_broken = False
+                    if road_id == 1 and lane1_id == "upper" and i in self.broken_cars_upper_1:
+                        is_broken = True
+                    elif road_id == 1 and lane1_id == "lower" and i in self.broken_cars_lower_1:
+                        is_broken = True
+                    elif road_id == 2 and lane1_id == "upper" and i in self.broken_cars_upper_2:
+                        is_broken = True
+                    elif road_id == 2 and lane1_id == "lower" and i in self.broken_cars_lower_2:
+                        is_broken = True
+                    elif road_id == 3 and lane1_id == "left" and i in self.broken_cars_left_3:
+                        is_broken = True
+                    elif road_id == 3 and lane1_id == "right" and i in self.broken_cars_right_3:
+                        is_broken = True
+                    elif road_id == 4 and lane1_id == "left" and i in self.broken_cars_left_4:
+                        is_broken = True
+                    elif road_id == 4 and lane1_id == "right" and i in self.broken_cars_right_4:
+                        is_broken = True
+                        
+                    if is_broken:
+                        broken_indices_lane1.append(i)
+                    else:
+                        working_indices_lane1.append(i)
+                        
+            broken_indices_lane2 = []
+            working_indices_lane2 = []
+            for i in range(len(lane2)):
+                if lane2[i] == 1:
+                    # Verificar si el coche está averiado
+                    is_broken = False
+                    if road_id == 1 and lane2_id == "upper" and i in self.broken_cars_upper_1:
+                        is_broken = True
+                    elif road_id == 1 and lane2_id == "lower" and i in self.broken_cars_lower_1:
+                        is_broken = True
+                    elif road_id == 2 and lane2_id == "upper" and i in self.broken_cars_upper_2:
+                        is_broken = True
+                    elif road_id == 2 and lane2_id == "lower" and i in self.broken_cars_lower_2:
+                        is_broken = True
+                    elif road_id == 3 and lane2_id == "left" and i in self.broken_cars_left_3:
+                        is_broken = True
+                    elif road_id == 3 and lane2_id == "right" and i in self.broken_cars_right_3:
+                        is_broken = True
+                    elif road_id == 4 and lane2_id == "left" and i in self.broken_cars_left_4:
+                        is_broken = True
+                    elif road_id == 4 and lane2_id == "right" and i in self.broken_cars_right_4:
+                        is_broken = True
+                        
+                    if is_broken:
+                        broken_indices_lane2.append(i)
+                    else:
+                        working_indices_lane2.append(i)
             
-            # Mezclar índices para seleccionar aleatoriamente
-            random.shuffle(indices_lane1)
-            random.shuffle(indices_lane2)
+            # Mezclar índices para seleccionar aleatoriamente, priorizando coches en buen estado
+            random.shuffle(working_indices_lane1)
+            random.shuffle(working_indices_lane2)
+            
+            # Solo eliminar coches no averiados si es posible
+            indices_lane1 = working_indices_lane1 + broken_indices_lane1
+            indices_lane2 = working_indices_lane2 + broken_indices_lane2
             
             # Eliminar coches en exceso
             for _ in range(excess):
                 if indices_lane1 and (not indices_lane2 or random.random() < 0.5):
-                    idx = indices_lane1.pop()
+                    idx = indices_lane1.pop(0)
                     lane1[idx] = 0
                     
                     # Eliminar también el objeto Car si se proporcionaron los IDs
@@ -584,9 +897,19 @@ class TrafficCrossSimulator:
                         if road_key in self.car_objects and lane1_id in self.car_objects[road_key]:
                             if idx in self.car_objects[road_key][lane1_id]:
                                 del self.car_objects[road_key][lane1_id][idx]
+                                
+                                # Si el coche estaba averiado, eliminarlo del diccionario de averiados
+                                if road_id == 1 and lane1_id == "upper" and idx in self.broken_cars_upper_1:
+                                    del self.broken_cars_upper_1[idx]
+                                elif road_id == 1 and lane1_id == "lower" and idx in self.broken_cars_lower_1:
+                                    del self.broken_cars_lower_1[idx]
+                                elif road_id == 2 and lane1_id == "upper" and idx in self.broken_cars_upper_2:
+                                    del self.broken_cars_upper_2[idx]
+                                elif road_id == 2 and lane1_id == "lower" and idx in self.broken_cars_lower_2:
+                                    del self.broken_cars_lower_2[idx]
                 
                 elif indices_lane2:
-                    idx = indices_lane2.pop()
+                    idx = indices_lane2.pop(0)
                     lane2[idx] = 0
                     
                     # Eliminar también el objeto Car si se proporcionaron los IDs
@@ -595,251 +918,97 @@ class TrafficCrossSimulator:
                         if road_key in self.car_objects and lane2_id in self.car_objects[road_key]:
                             if idx in self.car_objects[road_key][lane2_id]:
                                 del self.car_objects[road_key][lane2_id][idx]
+                                
+                                # Si el coche estaba averiado, eliminarlo del diccionario de averiados
+                                if road_id == 1 and lane2_id == "upper" and idx in self.broken_cars_upper_1:
+                                    del self.broken_cars_upper_1[idx]
+                                elif road_id == 1 and lane2_id == "lower" and idx in self.broken_cars_lower_1:
+                                    del self.broken_cars_lower_1[idx]
+                                elif road_id == 2 and lane2_id == "upper" and idx in self.broken_cars_upper_2:
+                                    del self.broken_cars_upper_2[idx]
+                                elif road_id == 2 and lane2_id == "lower" and idx in self.broken_cars_lower_2:
+                                    del self.broken_cars_lower_2[idx]
                 else:
                     # No hay más coches que eliminar
                     break
     
     def draw(self):
+        # Primero dibujamos el fondo
         screen.blit(road_img, (0, 0))
         
         # Obtener tiempo para efectos visuales
         current_time = pygame.time.get_ticks()
         
-        # ======= Dibujar autos en carreteras horizontales =======
+        # Dibujar todos los coches desde los objetos Car
+        all_cars = self._get_all_cars()
         
-        # Carretera 1 (derecha a izquierda)
-        for i in range(NUM_CELLS_HORIZONTAL):
-            x_pos = i * CELL_SIZE
+        for car in all_cars:
+            # No dibujar coches que están en proceso de giro y ya han "desaparecido"
+            if car.status == "turning" and car.turning_progress >= 2:
+                continue
+                
+            # Obtener posición en pantalla según carretera y carril
+            if car.road_id == 1:  # Carretera 1 (E→O)
+                x_pos = car.position * CELL_SIZE
+                # Asegurar que la posición es válida para dibujo
+                x_pos = x_pos % WIDTH  # Mantener dentro del canvas
+                offset_y = int(math.sin(current_time / 500.0 + car.position) * 2)
+                
+                if car.lane_id == "upper":
+                    y_pos = UPPER_LANE_1_Y + offset_y
+                else:  # lower
+                    y_pos = LOWER_LANE_1_Y + offset_y
             
-            # Carril superior
-            if self.upper_lane_1[i] == 1:
-                offset_y = int(math.sin(current_time / 500.0 + i) * 2)
-                y_pos = UPPER_LANE_1_Y + offset_y
+            elif car.road_id == 2:  # Carretera 2 (O→E)
+                x_pos = car.position * CELL_SIZE
+                offset_y = int(math.sin(current_time / 500.0 + car.position + 20) * 2)
                 
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
+                if car.lane_id == "upper":
+                    y_pos = UPPER_LANE_2_Y + offset_y
+                else:  # lower
+                    y_pos = LOWER_LANE_2_Y + offset_y
                 
-                if i in self.broken_cars_upper_1:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(CELL_SIZE//2, CELL_SIZE)
-                        smoke_y = y_pos + random.randint(5, 15)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_left_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_left_img, (x_pos, y_pos))
+            elif car.road_id == 3:  # Carretera 3 (N→S)
+                y_pos = car.position * CELL_SIZE
+                offset_x = int(math.sin(current_time / 500.0 + car.position + 40) * 2)
+                
+                if car.lane_id == "left":
+                    x_pos = LEFT_LANE_3_X + offset_x
+                else:  # right
+                    x_pos = RIGHT_LANE_3_X + offset_x
+                
+            else:  # Carretera 4 (S→N)
+                y_pos = car.position * CELL_SIZE
+                offset_x = int(math.sin(current_time / 500.0 + car.position + 60) * 2)
+                
+                if car.lane_id == "left":
+                    x_pos = LEFT_LANE_4_X + offset_x
+                else:  # right
+                    x_pos = RIGHT_LANE_4_X + offset_x
             
-            # Carril inferior
-            if self.lower_lane_1[i] == 1:
-                offset_y = int(math.sin(current_time / 500.0 + i + 10) * 2)
-                y_pos = LOWER_LANE_1_Y + offset_y
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_lower_1:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(CELL_SIZE//2, CELL_SIZE)
-                        smoke_y = y_pos + random.randint(5, 15)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_left_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_left_img, (x_pos, y_pos))
+            # Dibujar sombra
+            shadow = pygame.Surface((CELL_SIZE - 10, 10))
+            shadow.fill((30, 30, 30))
+            shadow.set_alpha(100)
+            screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
+            
+            # Dibujar humo si está averiado
+            if car.status == "broken":
+                for _ in range(3):
+                    smoke_x = x_pos + random.randint(5, 15)
+                    smoke_y = y_pos + random.randint(5, 15)
+                    smoke_size = random.randint(5, 10)
+                    smoke_alpha = random.randint(50, 150)
+                    smoke = pygame.Surface((smoke_size, smoke_size))
+                    smoke.fill(WHITE)
+                    smoke.set_alpha(smoke_alpha)
+                    screen.blit(smoke, (smoke_x, smoke_y))
+            
+            # Obtener y dibujar la imagen correcta
+            car_img = self.get_car_image(car)
+            screen.blit(car_img, (x_pos, y_pos))
         
-        # Carretera 2 (izquierda a derecha)
-        for i in range(NUM_CELLS_HORIZONTAL):
-            x_pos = i * CELL_SIZE
-            
-            # Carril superior
-            if self.upper_lane_2[i] == 1:
-                offset_y = int(math.sin(current_time / 500.0 + i + 20) * 2)
-                y_pos = UPPER_LANE_2_Y + offset_y
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_upper_2:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(0, CELL_SIZE//2)
-                        smoke_y = y_pos + random.randint(5, 15)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_right_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_right_img, (x_pos, y_pos))
-            
-            # Carril inferior
-            if self.lower_lane_2[i] == 1:
-                offset_y = int(math.sin(current_time / 500.0 + i + 30) * 2)
-                y_pos = LOWER_LANE_2_Y + offset_y
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_lower_2:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(0, CELL_SIZE//2)
-                        smoke_y = y_pos + random.randint(5, 15)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_right_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_right_img, (x_pos, y_pos))
-        
-        # ======= Dibujar autos en carreteras verticales =======
-        
-        # Carretera 3 (arriba a abajo)
-        for i in range(NUM_CELLS_VERTICAL):
-            y_pos = i * CELL_SIZE
-            
-            # Carril izquierdo
-            if self.left_lane_3[i] == 1:
-                offset_x = int(math.sin(current_time / 500.0 + i + 40) * 2)
-                x_pos = LEFT_LANE_3_X + offset_x
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_left_3:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(5, 15)
-                        smoke_y = y_pos + random.randint(0, CELL_SIZE//2)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_down_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_down_img, (x_pos, y_pos))
-            
-            # Carril derecho
-            if self.right_lane_3[i] == 1:
-                offset_x = int(math.sin(current_time / 500.0 + i + 50) * 2)
-                x_pos = RIGHT_LANE_3_X + offset_x
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_right_3:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(5, 15)
-                        smoke_y = y_pos + random.randint(0, CELL_SIZE//2)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_down_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_down_img, (x_pos, y_pos))
-        
-        # Carretera 4 (abajo a arriba)
-        for i in range(NUM_CELLS_VERTICAL):
-            y_pos = i * CELL_SIZE
-            
-            # Carril izquierdo
-            if self.left_lane_4[i] == 1:
-                offset_x = int(math.sin(current_time / 500.0 + i + 60) * 2)
-                x_pos = LEFT_LANE_4_X + offset_x
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_left_4:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(5, 15)
-                        smoke_y = y_pos + random.randint(CELL_SIZE//2, CELL_SIZE)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_up_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_up_img, (x_pos, y_pos))
-            
-            # Carril derecho
-            if self.right_lane_4[i] == 1:
-                offset_x = int(math.sin(current_time / 500.0 + i + 70) * 2)
-                x_pos = RIGHT_LANE_4_X + offset_x
-                
-                # Sombra
-                shadow = pygame.Surface((CELL_SIZE - 10, 10))
-                shadow.fill((30, 30, 30))
-                shadow.set_alpha(100)
-                screen.blit(shadow, (x_pos + 5, y_pos + CELL_SIZE - 5))
-                
-                if i in self.broken_cars_right_4:
-                    # Efecto de humo
-                    for _ in range(3):
-                        smoke_x = x_pos + random.randint(5, 15)
-                        smoke_y = y_pos + random.randint(CELL_SIZE//2, CELL_SIZE)
-                        smoke_size = random.randint(5, 10)
-                        smoke_alpha = random.randint(50, 150)
-                        smoke = pygame.Surface((smoke_size, smoke_size))
-                        smoke.fill(WHITE)
-                        smoke.set_alpha(smoke_alpha)
-                        screen.blit(smoke, (smoke_x, smoke_y))
-                    
-                    screen.blit(broken_car_up_img, (x_pos, y_pos))
-                else:
-                    screen.blit(car_up_img, (x_pos, y_pos))
+        # Visualización de estadísticas y área del cruce
         
         # Resaltar el área del cruce para mejor visualización
         # Calculamos el número de celdas basado en CROSS_SIZE
@@ -952,13 +1121,93 @@ class TrafficCrossSimulator:
         all_cars = self._get_all_cars()
         random.shuffle(all_cars)  # Aleatorizar orden para evitar favorecer direcciones
         
+        # Contador de coches remolcados en esta generación
+        removed_cars_count = 0
+        
         # Actualizar cada coche individualmente
         for car in all_cars:
-            car.update(self)
+            car_updated = car.update(self)
+            
+            # Si el coche fue remolcado (removido), no incluirlo en el nuevo estado
+            if car.status == "removed":
+                removed_cars_count += 1
+                # También eliminar el coche de los diccionarios de coches averiados
+                road_id = car.road_id
+                lane_id = car.lane_id
+                position = car.position
+                
+                # Limpiar referencias a coches remolcados de los diccionarios de averiados
+                if road_id == 1:
+                    if lane_id == "upper" and position in self.broken_cars_upper_1:
+                        del self.broken_cars_upper_1[position]
+                    elif lane_id == "lower" and position in self.broken_cars_lower_1:
+                        del self.broken_cars_lower_1[position]
+                elif road_id == 2:
+                    if lane_id == "upper" and position in self.broken_cars_upper_2:
+                        del self.broken_cars_upper_2[position]
+                    elif lane_id == "lower" and position in self.broken_cars_lower_2:
+                        del self.broken_cars_lower_2[position]
+                elif road_id == 3:
+                    if lane_id == "left" and position in self.broken_cars_left_3:
+                        del self.broken_cars_left_3[position]
+                    elif lane_id == "right" and position in self.broken_cars_right_3:
+                        del self.broken_cars_right_3[position]
+                elif road_id == 4:
+                    if lane_id == "left" and position in self.broken_cars_left_4:
+                        del self.broken_cars_left_4[position]
+                    elif lane_id == "right" and position in self.broken_cars_right_4:
+                        del self.broken_cars_right_4[position]
+                
+                continue
+                
+            # Comprobar que el coche esté dentro de los límites válidos
+            if car.road_id in [1, 2]:
+                if car.position < 0 or car.position >= NUM_CELLS_HORIZONTAL:
+                    if self.boundary_mode == "toroid":
+                        car.position = car.position % NUM_CELLS_HORIZONTAL
+                    else:
+                        # No incluir coches que salieron de los límites en modo nulo
+                        continue
+            else:  # road_id en [3, 4]
+                if car.position < 0 or car.position >= NUM_CELLS_VERTICAL:
+                    if self.boundary_mode == "toroid":
+                        car.position = car.position % NUM_CELLS_VERTICAL
+                    else:
+                        # No incluir coches que salieron de los límites en modo nulo
+                        continue
+            
             # Añadir el coche a la nueva estructura en su nueva posición
             road_key = f"road{car.road_id}"
-            if car.position not in new_car_objects[road_key][car.lane_id]:
-                new_car_objects[road_key][car.lane_id][car.position] = car
+            if road_key in new_car_objects and car.lane_id in new_car_objects[road_key]:
+                # Evitar colisiones: no sobreescribir posiciones ya ocupadas
+                if car.position not in new_car_objects[road_key][car.lane_id]:
+                    new_car_objects[road_key][car.lane_id][car.position] = car
+                else:
+                    # Si hay colisión, retroceder el coche a su posición anterior
+                    # e intentar incluirlo nuevamente
+                    if car_updated:  # Si hubo actualización, restaurar posición anterior
+                        if car.direction == "left_to_right" or car.direction == "top_to_bottom":
+                            car.position -= 1
+                        else:  # "right_to_left" o "bottom_to_top"
+                            car.position += 1
+                            
+                        # Verificar límites nuevamente después de restaurar
+                        if car.road_id in [1, 2]:
+                            if car.position < 0 or car.position >= NUM_CELLS_HORIZONTAL:
+                                if self.boundary_mode == "toroid":
+                                    car.position = car.position % NUM_CELLS_HORIZONTAL
+                                else:
+                                    continue
+                        else:
+                            if car.position < 0 or car.position >= NUM_CELLS_VERTICAL:
+                                if self.boundary_mode == "toroid":
+                                    car.position = car.position % NUM_CELLS_VERTICAL
+                                else:
+                                    continue
+                                    
+                        # Intentar añadir en la posición restaurada si está libre
+                        if car.position not in new_car_objects[road_key][car.lane_id]:
+                            new_car_objects[road_key][car.lane_id][car.position] = car
         
         # Actualizar la estructura principal
         self.car_objects = new_car_objects
@@ -981,17 +1230,18 @@ class TrafficCrossSimulator:
         # Carretera 1 (derecha a izquierda, inserción por la derecha)
         road1_total = np.sum(self.upper_lane_1) + np.sum(self.lower_lane_1)
         if road1_total < self.MAX_CARS_PER_ROAD and random.random() < CAR_INSERTION_PROB * 0.3:
-            # Intentar insertar en el carril con menos autos primero
-            if np.sum(self.upper_lane_1) <= np.sum(self.lower_lane_1) and self.upper_lane_1[-1] == 0:
-                self.upper_lane_1[-1] = 1
+            # Asegurarnos de insertar en la última celda visible
+            edge_position = min(NUM_CELLS_HORIZONTAL - 1, WIDTH // CELL_SIZE - 1)
+            if self.upper_lane_1[edge_position] == 0:
+                self.upper_lane_1[edge_position] = 1
                 # Crear objeto Car para esta posición
-                car = Car(1, "upper", NUM_CELLS_HORIZONTAL - 1, "right_to_left")
-                self.car_objects["road1"]["upper"][NUM_CELLS_HORIZONTAL - 1] = car
-            elif self.lower_lane_1[-1] == 0:
-                self.lower_lane_1[-1] = 1
+                car = Car(1, "upper", edge_position, "right_to_left")
+                self.car_objects["road1"]["upper"][edge_position] = car
+            elif self.lower_lane_1[edge_position] == 0:
+                self.lower_lane_1[edge_position] = 1
                 # Crear objeto Car para esta posición
-                car = Car(1, "lower", NUM_CELLS_HORIZONTAL - 1, "right_to_left")
-                self.car_objects["road1"]["lower"][NUM_CELLS_HORIZONTAL - 1] = car
+                car = Car(1, "lower", edge_position, "right_to_left")
+                self.car_objects["road1"]["lower"][edge_position] = car
         
         # Carretera 2 (izquierda a derecha, inserción por la izquierda)
         road2_total = np.sum(self.upper_lane_2) + np.sum(self.lower_lane_2)
@@ -1035,31 +1285,46 @@ class TrafficCrossSimulator:
                 car = Car(4, "right", NUM_CELLS_VERTICAL - 1, "bottom_to_top")
                 self.car_objects["road4"]["right"][NUM_CELLS_VERTICAL - 1] = car
     
-    def handle_broken_cars(self):
-        """
-        Actualiza el estado de los coches averiados.
-        Este método se mantiene por compatibilidad, pero ahora
-        la lógica principal está en Car.update_broken()
-        """
-        # Ahora esta lógica está en el método update de cada objeto Car
-        # y en el método _rebuild_position_maps
-        pass
+    # Métodos de compatibilidad eliminados
     
-    def apply_rule_184_horizontal(self, lane, direction):
-        """
-        Este método se mantiene por compatibilidad, ahora la lógica
-        está en el método update_movement de cada objeto Car
-        """
-        # Crear una copia del carril para el nuevo estado
-        return lane.copy()
+    def get_car_image(self, car):
+        """Obtiene la imagen correcta para el coche según su origen y dirección actual"""
+        origin = car.origin_id
+        is_broken = car.status == "broken"
+        
+        # Mapear las imágenes de coches según origen y dirección actual
+        if car.direction == "left_to_right":
+            img_prefix = f"{origin}_right"
+        elif car.direction == "right_to_left":
+            img_prefix = f"{origin}_left"
+        elif car.direction == "top_to_bottom":
+            img_prefix = f"{origin}_down"
+        elif car.direction == "bottom_to_top":
+            img_prefix = f"{origin}_up"
     
-    def apply_rule_184_vertical(self, lane, direction):
-        """
-        Este método se mantiene por compatibilidad, ahora la lógica
-        está en el método update_movement de cada objeto Car
-        """
-        # Crear una copia del carril para el nuevo estado
-        return lane.copy()
+        # Cargar imagen del coche (usar diferentes imágenes según origen y dirección)
+        img_path = os.path.join(parent_dir, f"./assets/{img_prefix}.png")
+        if os.path.exists(img_path):
+            car_img = pygame.image.load(img_path)
+            car_img = pygame.transform.scale(car_img, (CELL_SIZE, CELL_SIZE))
+            
+            # Si está averiado, aplicar overlay rojo
+            if is_broken:
+                red_overlay = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
+                red_overlay.fill((255, 0, 0, 100))
+                car_img.blit(red_overlay, (0, 0))
+            
+            return car_img
+        else:
+            # Si no existe la imagen específica, usar imagen genérica según dirección
+            if car.direction == "left_to_right":
+                return broken_car_right_img if is_broken else car_right_img
+            elif car.direction == "right_to_left":
+                return broken_car_left_img if is_broken else car_left_img
+            elif car.direction == "top_to_bottom":
+                return broken_car_down_img if is_broken else car_down_img
+            else:  # bottom_to_top
+                return broken_car_up_img if is_broken else car_up_img
     
 
 def main():
