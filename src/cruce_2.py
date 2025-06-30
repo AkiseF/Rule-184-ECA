@@ -12,7 +12,7 @@ pygame.init()
 WIDTH, HEIGHT = 800, 800  # Dimensiones del canvas
 CELL_SIZE = 20  # Tamaño de celda (20px como se especifica)
 NUM_CELLS = 50  # Número de celdas por carril
-MAX_CARS_PER_ROAD = 30  # Límite de coches iniciales por carretera
+MAX_CARS_PER_ROAD = 20  # Límite de coches iniciales por carretera
 
 # Posiciones Y para los carriles horizontales (carreteras 1 y 2)
 UPPER_LANE_1_Y = 372  # Carril superior de primera carretera (Este a Oeste)
@@ -44,6 +44,13 @@ CROSS_INDEX_HORIZONTAL_START = (WIDTH // 2 - 20) // CELL_SIZE
 CROSS_INDEX_HORIZONTAL_END = (WIDTH // 2 + 20) // CELL_SIZE
 CROSS_INDEX_VERTICAL_START = (HEIGHT // 2 - 20) // CELL_SIZE
 CROSS_INDEX_VERTICAL_END = (HEIGHT // 2 + 20) // CELL_SIZE
+
+# Definir las celdas exactas de intersección para los giros
+# Estas son las celdas donde los carriles se intersectan
+INTERSECTION_ROAD1_ROAD4 = 18 #(WIDTH // 2 + RIGHT_LANE_4_X - UPPER_LANE_1_Y) // CELL_SIZE  # Road 1 upper -> Road 4 right
+INTERSECTION_ROAD2_ROAD3 = 18#(WIDTH // 2 - LEFT_LANE_3_X + LOWER_LANE_2_Y) // CELL_SIZE   # Road 2 lower -> Road 3 left
+INTERSECTION_ROAD3_ROAD1 = 18#(HEIGHT // 2 - UPPER_LANE_1_Y + LEFT_LANE_3_X) // CELL_SIZE  # Road 3 left -> Road 1 upper
+INTERSECTION_ROAD4_ROAD2 = 18#(HEIGHT // 2 + LOWER_LANE_2_Y - RIGHT_LANE_4_X) // CELL_SIZE # Road 4 right -> Road 2 lower
 
 # Colores
 BLACK = (0, 0, 0)
@@ -94,7 +101,7 @@ car_images = {
 }
 
 # Configurar icono de ventana
-pygame.display.set_icon(load_image("logo_1.png"))
+pygame.display.set_icon(load_image("logo_2.png"))
 
 # Definición de la clase Car para representar cada coche en la simulación
 class Car:
@@ -292,12 +299,38 @@ class Car:
                 if particle['lifetime'] <= 0:
                     self.smoke_particles.remove(particle)
     
+    def update_smoke(self):
+        """Actualiza las partículas de humo para coches averiados."""
+        # Agregar nuevas partículas de humo
+        if random.random() < 0.3:  # 30% de prob. por frame de agregar una nueva partícula
+            offset_x = random.randint(-10, 10)
+            offset_y = random.randint(-15, -5)
+            size = random.randint(2, 6)
+            lifetime = random.randint(20, 40)
+            self.smoke_particles.append({
+                'x': self.x + offset_x,
+                'y': self.y + offset_y,
+                'size': size,
+                'lifetime': lifetime
+            })
+    
+        # Actualizar partículas existentes
+        for particle in self.smoke_particles[:]:
+            particle['y'] -= 0.5  # El humo sube
+            particle['lifetime'] -= 1
+            if particle['lifetime'] <= 0:
+                self.smoke_particles.remove(particle)
+    
     def draw(self, surface):
         """Dibuja el coche en la superficie dada."""
         # Para cambio de carril, actualizar la animación
         if self.changing_lane:
             self.update_animation()
-        
+    
+        # Si el coche está averiado, actualizar las partículas de humo
+        if self.broken:
+            self.update_smoke()
+    
         # Determinar la imagen correcta según el tipo original y la dirección actual
         img_key = f"{self.origin_road}_{self.direction}"
         if img_key in car_images:
@@ -366,7 +399,23 @@ class TrafficSimulator:
         
         # Fuente para el texto en la pantalla
         self.font = pygame.font.SysFont("Arial", 16)
-    
+        
+        # Agregar colas FIFO para cada punto de giro
+        self.turn_queues = {
+            "1_to_4": [],  # Cola para giros de Road 1 (upper) -> Road 4 (right)
+            "2_to_3": [],  # Cola para giros de Road 2 (lower) -> Road 3 (left)
+            "3_to_1": [],  # Cola para giros de Road 3 (left) -> Road 1 (upper)
+            "4_to_2": []   # Cola para giros de Road 4 (right) -> Road 2 (lower)
+        }
+        
+        # Estado de las intersecciones (0 = libre, 1 = ocupada)
+        self.intersection_states = {
+            "1_to_4": 0,
+            "2_to_3": 0,
+            "3_to_1": 0,
+            "4_to_2": 0
+        }
+
     def initialize_cars(self):
         """Inicializa los coches de forma aleatoria al inicio de la simulación."""
         # Limpiamos cualquier coche existente
@@ -458,20 +507,37 @@ class TrafficSimulator:
         """Comprueba si un coche está en posición de dar vuelta."""
         if car.road == 1 and car.lane == 'upper':
             # Carretera 1 (Este a Oeste), carril superior puede dar vuelta hacia la carretera 4
-            return car.position == NUM_CELLS - (CROSS_INDEX_HORIZONTAL_START + 1)
+            return car.position == INTERSECTION_ROAD1_ROAD4
         elif car.road == 2 and car.lane == 'lower':
             # Carretera 2 (Oeste a Este), carril inferior puede dar vuelta hacia la carretera 3
-            return car.position == CROSS_INDEX_HORIZONTAL_END - 1
+            return car.position == INTERSECTION_ROAD2_ROAD3
         elif car.road == 3 and car.lane == 'left':
             # Carretera 3 (Norte a Sur), carril izquierdo puede dar vuelta hacia la carretera 1
-            return car.position == CROSS_INDEX_VERTICAL_START - 1
+            return car.position == INTERSECTION_ROAD3_ROAD1
         elif car.road == 4 and car.lane == 'right':
             # Carretera 4 (Sur a Norte), carril derecho puede dar vuelta hacia la carretera 2
-            return car.position == NUM_CELLS - (CROSS_INDEX_VERTICAL_END + 1)
+            return car.position == INTERSECTION_ROAD4_ROAD2
         return False
+    
+    # Añadir método para obtener la clave de la cola basada en el coche
+    def get_turn_queue_key(self, car):
+        """Obtiene la clave de la cola para un coche en posición de giro."""
+        if car.road == 1 and car.lane == 'upper':
+            return "1_to_4"
+        elif car.road == 2 and car.lane == 'lower':
+            return "2_to_3"
+        elif car.road == 3 and car.lane == 'left':
+            return "3_to_1"
+        elif car.road == 4 and car.lane == 'right':
+            return "4_to_2"
+        return None
     
     def get_target_turn(self, car):
         """Determina la carretera y carril objetivo para un giro."""
+        # Primero verificamos que el coche esté en una posición válida para girar
+        if not self.is_turn_position(car):
+            return None
+            
         if car.road == 1 and car.lane == 'upper':
             return (4, 'right')  # De carretera 1 a carretera 4
         elif car.road == 2 and car.lane == 'lower':
@@ -526,50 +592,66 @@ class TrafficSimulator:
         temp_cars = self.cars.copy()
         cars_to_remove = []
         
-        # Actualizar cada coche
-        for car in temp_cars:
-            # Saltarse coches en animación de cambio de carril
-            if car.changing_lane:
-                continue
-            
-            # Comprobar si el coche está averiado
-            if car.broken:
-                result = car.repair()
-                if result is False:  # Coche remolcado
-                    cars_to_remove.append(car)
-                    # Liberar la celda
-                    lane_array = self.get_lane_array(car.road, car.lane)
-                    lane_array[car.position] = 0
-                continue
-            
-            # Verificar si el coche se avería
-            if random.random() < CAR_BREAKDOWN_PROB:
-                car.break_down()
-                continue
-            
-            # Comprobar si el coche puede dar vuelta
-            if self.is_turn_position(car) and random.random() < CAR_TURN_PROB:
-                target_road, target_lane = self.get_target_turn(car)
+        # Procesar primero las colas de giro (FIFO)
+        for queue_key, queue in self.turn_queues.items():
+            # Si hay coches en la cola y la intersección está libre
+            while queue and self.intersection_states[queue_key] == 0:
+                car = queue[0]  # Obtener el primer coche de la cola
                 
-                # Calculamos la posición destino según el tipo de giro
-                target_pos = 0
-                if car.road == 1 and target_road == 4:  # De Este a Sur -> Norte
-                    target_pos = NUM_CELLS - (CROSS_INDEX_VERTICAL_END + 1)
-                elif car.road == 2 and target_road == 3:  # De Oeste a Norte -> Sur
-                    target_pos = CROSS_INDEX_VERTICAL_START + 1
-                elif car.road == 3 and target_road == 1:  # De Norte a Oeste -> Este
-                    target_pos = NUM_CELLS - (CROSS_INDEX_HORIZONTAL_START + 1)
-                elif car.road == 4 and target_road == 2:  # De Sur a Este -> Oeste
-                    target_pos = CROSS_INDEX_HORIZONTAL_END + 1
+                # Verificar que el coche sigue siendo válido para girar
+                if car not in self.cars or not self.is_turn_position(car):
+                    queue.pop(0)  # Eliminar el coche de la cola si ya no es válido
+                    continue
                 
-                # Verificar si la celda destino está libre
-                target_lane_array = self.get_lane_array(target_road, target_lane)
-                if target_lane_array[target_pos] == 0:
+                # Determinar carretera y carril destino
+                target_turn = self.get_target_turn(car)
+                if target_turn is None:
+                    # Si el coche ya no puede girar (por ejemplo, cambió de carril), quitarlo de la cola
+                    queue.pop(0)
+                    continue
+                
+                target_road, target_lane = target_turn
+                break  # Salir del bucle while si encontramos un coche válido
+            
+            # Si la cola está vacía o la intersección está ocupada, continuar con la siguiente cola
+            if not queue or self.intersection_states[queue_key] != 0:
+                continue
+                
+            car = queue[0]  # Obtener nuevamente el coche (ahora sabemos que es válido)
+            
+            # Corregir el cálculo de la posición destino según el tipo de giro
+            target_pos = 0
+            if car.road == 1 and target_road == 4:  # De Este a Sur -> Norte
+                # El coche debe aparecer en la celda justo por debajo del cruce
+                # Usando la posición vertical del cruce convertida a índice
+                target_pos = (CROSS_Y + CELL_SIZE) // CELL_SIZE
+            elif car.road == 2 and target_road == 3:  # De Oeste a Norte -> Sur
+                # El coche debe aparecer en la celda justo por encima del cruce
+                # Usando la posición vertical del cruce convertida a índice
+                target_pos = (CROSS_Y - CELL_SIZE) // CELL_SIZE
+            elif car.road == 3 and target_road == 1:  # De Norte a Oeste -> Este
+                # El coche debe aparecer en la celda justo a la izquierda del cruce
+                # Usando la posición horizontal del cruce convertida a índice
+                target_pos = (CROSS_X - CELL_SIZE) // CELL_SIZE
+            elif car.road == 4 and target_road == 2:  # De Sur a Este -> Oeste
+                # El coche debe aparecer en la celda justo a la derecha del cruce
+                # Usando la posición horizontal del cruce convertida a índice
+                target_pos = (CROSS_X + CELL_SIZE) // CELL_SIZE
+            
+            # Verificar si la celda destino está libre
+            target_lane_array = self.get_lane_array(target_road, target_lane)
+            if target_lane_array[target_pos] == 0:
+                    # Quitar el coche de la cola
+                    queue.pop(0)
+                    
+                    # Marcar la intersección como ocupada temporalmente
+                    self.intersection_states[queue_key] = 1
+                    
                     # Liberar la celda actual
                     lane_array = self.get_lane_array(car.road, car.lane)
                     lane_array[car.position] = 0
                     
-                    # Realizar el giro de forma inmediata
+                    # Realizar el giro
                     car.road = target_road
                     car.lane = target_lane
                     car.position = target_pos
@@ -584,13 +666,47 @@ class TrafficSimulator:
                     elif target_road == 4:
                         car.direction = 'up'
                     
-                    # NOTA: Mantenemos origin_road sin cambios para preservar el tipo/perfil del coche
-                    
                     car.update_drawing_position()
                     
                     # Ocupar la nueva celda en el carril destino
                     target_lane_array[target_pos] = 1
-                    continue
+                    
+                    # Liberar la intersección después de un breve retraso
+                    # Se implementa marcando la intersección como libre en la siguiente actualización
+                    self.intersection_states[queue_key] = 0
+        
+        # Actualizar cada coche
+        for car in temp_cars:
+            # Saltarse coches en animación de cambio de carril
+            if car.changing_lane:
+                continue
+            
+            # Comprobar si el coche está averiado
+            if car.broken:
+                result = car.repair()
+                if result is False:  # Coche remolcado
+                    cars_to_remove.append(car)
+                    # Liberar la celda
+                    lane_array = self.get_lane_array(car.road, car.lane)
+                    lane_array[car.position] = 0
+                continue  # <-- Este continue es crucial
+                
+            # Verificar si el coche se avería
+            if random.random() < CAR_BREAKDOWN_PROB:
+                car.break_down()
+                continue
+                
+            # Comprobar si el coche puede dar vuelta
+            if self.is_turn_position(car) and random.random() < CAR_TURN_PROB:
+                queue_key = self.get_turn_queue_key(car)
+                target_turn = self.get_target_turn(car)
+                
+                # Si el coche no está ya en una cola Y es elegible para un giro, añadirlo
+                if queue_key and target_turn is not None and car not in self.turn_queues[queue_key]:
+                    self.turn_queues[queue_key].append(car)
+                
+                # Como el coche está esperando para girar, no se mueve
+                continue
             
             # Comprobar cambio de carril (si no está en la zona de cruce)
             if not self.is_in_crossing_area(car.road, car.position) and random.random() < CAR_CHANGE_LANE_PROB:
@@ -653,6 +769,21 @@ class TrafficSimulator:
         
         # Eliminar coches marcados para eliminar
         for car in cars_to_remove:
+            # Asegurarse de eliminar el coche de las colas de giro también
+            for queue_key, queue in self.turn_queues.items():
+                while car in queue:  # Eliminar todas las instancias del coche en la cola (por si hay duplicados)
+                    queue.remove(car)
+            
+            if car in self.cars:
+                self.cars.remove(car)
+        
+        # Eliminar coches marcados para eliminar
+        for car in cars_to_remove:
+            # Asegurarse de eliminar el coche de las colas de giro también
+            for queue in self.turn_queues.values():
+                if car in queue:
+                    queue.remove(car)
+            
             if car in self.cars:
                 self.cars.remove(car)
     
@@ -702,17 +833,45 @@ class TrafficSimulator:
         surface.blit(cruce_img, (0, 0))
         
         # Resaltar el área del cruce para mejor visualización
-        cross_size = 40  # Tamaño del área del cruce (ancho y alto)
-        cross_cells = cross_size // CELL_SIZE  # Número de celdas que abarca el cruce
-        cross_area = pygame.Surface((cross_cells * CELL_SIZE, cross_cells * CELL_SIZE), pygame.SRCALPHA)
+        cross_size = 100  # Tamaño del área del cruce (ancho y alto) - Ampliado
+        cross_area = pygame.Surface((cross_size, cross_size), pygame.SRCALPHA)
         cross_area.fill((255, 255, 0, 50))  # Amarillo transparente
         
         # Centrar en el cruce
-        cross_x = CROSS_X - (cross_cells * CELL_SIZE) // 2
-        cross_y = CROSS_Y - (cross_cells * CELL_SIZE) // 2
+        cross_x = CROSS_X - cross_size // 2
+        cross_y = CROSS_Y - cross_size // 2
         
         # Dibujar el área del cruce
         surface.blit(cross_area, (cross_x, cross_y))
+        
+        # Resaltar las intersecciones específicas de giro
+        intersection_size = CELL_SIZE
+        
+        # Dibujar cada punto de giro con el color según su estado
+        # Road 1 (upper) -> Road 4 (right)
+        color = GREEN  # Siempre verde independientemente del estado
+        pygame.draw.rect(surface, (*color[:3], 120), 
+                         (WIDTH - INTERSECTION_ROAD1_ROAD4 * CELL_SIZE - CELL_SIZE//2,
+                          UPPER_LANE_1_Y - CELL_SIZE//2,
+                          intersection_size, intersection_size))
+        
+        # Road 2 (lower) -> Road 3 (left)
+        pygame.draw.rect(surface, (*GREEN[:3], 120), 
+                         (INTERSECTION_ROAD2_ROAD3 * CELL_SIZE - CELL_SIZE//2,
+                          LOWER_LANE_2_Y - CELL_SIZE//2,
+                          intersection_size, intersection_size))
+        
+        # Road 3 (left) -> Road 1 (upper)
+        pygame.draw.rect(surface, (*GREEN[:3], 120), 
+                         (LEFT_LANE_3_X - CELL_SIZE//2,
+                          INTERSECTION_ROAD3_ROAD1 * CELL_SIZE - CELL_SIZE//2,
+                          intersection_size, intersection_size))
+        
+        # Road 4 (right) -> Road 2 (lower)
+        pygame.draw.rect(surface, (*GREEN[:3], 120), 
+                         (RIGHT_LANE_4_X - CELL_SIZE//2,
+                          HEIGHT - INTERSECTION_ROAD4_ROAD2 * CELL_SIZE - CELL_SIZE//2,
+                          intersection_size, intersection_size))
         
         # Dibujar todos los coches
         for car in self.cars:
@@ -723,7 +882,7 @@ class TrafficSimulator:
         
         # Crear un panel para controles e información en la esquina superior derecha
         panel_width = 180
-        panel_height = 180
+        panel_height = 180  # Aumentado para mostrar información de las colas
         controls_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
         controls_surface.fill((*BLACK[:3], 120))  # Negro más transparente
         surface.blit(controls_surface, (WIDTH - panel_width - 10, 10))
@@ -733,8 +892,7 @@ class TrafficSimulator:
             f"Generación: {self.generation}",
             f"Modo: {'Toroide' if self.boundary_mode == 'toroid' else 'Frontera Nula'}",
             f"Coches Totales: {len(self.cars)}",
-            f"Velocidad: {self.simulation_speed} FPS",
-            f"Cruce: Área amarilla"
+            f"Velocidad: {self.simulation_speed} FPS"
         ]
         
         # Posición inicial para textos en el panel
